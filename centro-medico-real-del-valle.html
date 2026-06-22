@@ -215,6 +215,7 @@ function showPatientDashboard(id) {
     <div class="flex gap-2 flex-shrink-0">
       <button onclick="showPatientProfile('${id}')" class="btn-tab px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-blue-100 dark:hover:bg-blue-900 transition-colors">Historia Clínica</button>
       <button onclick="showNewVisit('${id}')" class="px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors">+ Nueva Nota</button>
+      <button onclick="deletePatient('${id}')" class="px-3 py-1.5 text-xs font-medium rounded-lg bg-red-100 dark:bg-red-900 hover:bg-red-200 dark:hover:bg-red-800 text-red-600 dark:text-red-400 transition-colors">Eliminar Paciente</button>
     </div>
   `);
 
@@ -761,6 +762,22 @@ function saveAndPrintVisit(patientId, editVisitId) {
     const p = state.patients.find(x => x.id === patientId);
     doPrintVisit(p, v);
   }
+}
+
+function deletePatient(id) {
+  const p = state.patients.find(x => x.id === id);
+  if (!p) return;
+  if (!confirm(`¿Eliminar permanentemente a "${p.nombre}" y todas sus notas? Esta acción no se puede deshacer.`)) return;
+  state.patients = state.patients.filter(x => x.id !== id);
+  activePatientId = null;
+  saveState();
+  renderPatientList();
+  setTopBar('<span class="text-gray-400 dark:text-gray-500 text-sm">Selecciona un paciente o crea uno nuevo</span>');
+  document.getElementById('mainContent').innerHTML = `
+    <div class="flex flex-col items-center justify-center h-full text-center text-gray-400 dark:text-gray-600">
+      <h2 class="text-xl font-semibold">Centro Médico Real del Valle</h2>
+      <p class="text-sm mt-2">Dr. Noé Alejandro Zúñiga González · Cédula 12741802</p>
+    </div>`;
 }
 
 function deleteVisit(patientId, visitId) {
