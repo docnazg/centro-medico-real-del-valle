@@ -79,19 +79,20 @@ tailwind.config = {
     </div>
     <!-- Patient list -->
     <div class="sidebar-scroll p-2" id="patientList"></div>
-    <!-- Export -->
-    <div class="p-3 border-t border-gray-200 dark:border-gray-700">
+    <!-- Export / Backup -->
+    <div class="p-3 border-t border-gray-200 dark:border-gray-700 space-y-2">
+      <!-- Auto-save status -->
+      <div id="autoSaveWidget" class="rounded-lg border border-dashed border-gray-300 dark:border-gray-600 p-2 text-xs text-center cursor-pointer hover:border-blue-400 dark:hover:border-blue-500 transition-colors" onclick="selectAutoSaveFolder()">
+        <div id="autoSaveIcon" class="text-base mb-0.5">📁</div>
+        <div id="autoSaveLabel" class="text-gray-500 dark:text-gray-400 font-medium leading-tight">Auto-guardado<br><span class="font-normal">Toca para elegir carpeta</span></div>
+      </div>
       <button onclick="exportExcel()"
         class="w-full py-2 text-xs font-medium bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors">
         Exportar Excel
       </button>
-      <button onclick="exportBackup()"
-        class="w-full py-2 text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">
-        Respaldar datos (JSON)
-      </button>
       <button onclick="document.getElementById('importFileInput').click()"
         class="w-full py-2 text-xs font-medium bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-lg transition-colors">
-        Restaurar respaldo
+        Restaurar respaldo JSON
       </button>
       <input type="file" id="importFileInput" accept=".json" class="hidden" onchange="importBackup(event)">
     </div>
@@ -137,6 +138,7 @@ function loadState() {
 }
 function saveState() {
   localStorage.setItem(DB_KEY, JSON.stringify(state));
+  autoSaveToFile();
 }
 
 // ─── DARK MODE ──────────────────────────────────────────────────────────────
@@ -1497,6 +1499,113 @@ function renderPrint(html) {
   }, 200);
 }
 
+// ─── AUTO-SAVE A CARPETA ────────────────────────────────────────────────────
+let idb = null;
+let autoSaveDirHandle = null;
+
+function initIDB() {
+  return new Promise((resolve) => {
+    const req = indexedDB.open('CMRV_IDB', 1);
+    req.onupgradeneeded = e => e.target.result.createObjectStore('handles');
+    req.onsuccess = e => { idb = e.target.result; resolve(); };
+    req.onerror = () => resolve();
+  });
+}
+
+function saveHandleToIDB(handle) {
+  return new Promise((resolve, reject) => {
+    const tx = idb.transaction('handles', 'readwrite');
+    tx.objectStore('handles').put(handle, 'autoSaveDir');
+    tx.oncomplete = resolve;
+    tx.onerror = reject;
+  });
+}
+
+function getHandleFromIDB() {
+  return new Promise((resolve) => {
+    if (!idb) { resolve(null); return; }
+    const tx = idb.transaction('handles', 'readonly');
+    const req = tx.objectStore('handles').get('autoSaveDir');
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => resolve(null);
+  });
+}
+
+async function autoSaveToFile() {
+  if (!autoSaveDirHandle) return;
+  try {
+    const perm = await autoSaveDirHandle.queryPermission({ mode: 'readwrite' });
+    if (perm !== 'granted') { setAutoSaveUI('needs-permission'); return; }
+    const fileHandle = await autoSaveDirHandle.getFileHandle('CMRV_datos.json', { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(JSON.stringify(state, null, 2));
+    await writable.close();
+    setAutoSaveUI('ok', autoSaveDirHandle.name);
+  } catch(e) {
+    console.warn('Auto-save error:', e);
+    setAutoSaveUI('needs-permission');
+  }
+}
+
+async function selectAutoSaveFolder() {
+  if (!window.showDirectoryPicker) {
+    alert('Esta función requiere Google Chrome.\nSafari no la soporta aún.\n\nUsa el botón "Restaurar respaldo JSON" para importar/exportar manualmente.');
+    return;
+  }
+  try {
+    const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+    autoSaveDirHandle = handle;
+    await saveHandleToIDB(handle);
+    await autoSaveToFile();
+  } catch(e) {
+    if (e.name !== 'AbortError') console.error(e);
+  }
+}
+
+async function reactivateAutoSave() {
+  if (!autoSaveDirHandle) return;
+  try {
+    const perm = await autoSaveDirHandle.requestPermission({ mode: 'readwrite' });
+    if (perm === 'granted') await autoSaveToFile();
+  } catch(e) { console.warn(e); }
+}
+
+function setAutoSaveUI(status, folderName = '') {
+  const widget = document.getElementById('autoSaveWidget');
+  const icon = document.getElementById('autoSaveIcon');
+  const label = document.getElementById('autoSaveLabel');
+  if (!widget) return;
+  if (status === 'ok') {
+    widget.className = 'rounded-lg border border-green-400 dark:border-green-600 bg-green-50 dark:bg-green-900/20 p-2 text-xs text-center transition-colors';
+    widget.onclick = selectAutoSaveFolder;
+    icon.textContent = '✅';
+    label.innerHTML = `<span class="text-green-700 dark:text-green-400 font-medium">Auto-guardado activo</span><br><span class="text-green-600 dark:text-green-500 font-normal truncate block max-w-full">${folderName}</span>`;
+  } else if (status === 'needs-permission') {
+    widget.className = 'rounded-lg border border-yellow-400 dark:border-yellow-600 bg-yellow-50 dark:bg-yellow-900/20 p-2 text-xs text-center cursor-pointer hover:border-yellow-500 transition-colors';
+    widget.onclick = reactivateAutoSave;
+    icon.textContent = '⚠️';
+    label.innerHTML = `<span class="text-yellow-700 dark:text-yellow-400 font-medium">Permiso requerido</span><br><span class="text-yellow-600 dark:text-yellow-500 font-normal">Toca para reactivar</span>`;
+  } else {
+    widget.className = 'rounded-lg border border-dashed border-gray-300 dark:border-gray-600 p-2 text-xs text-center cursor-pointer hover:border-blue-400 dark:hover:border-blue-500 transition-colors';
+    widget.onclick = selectAutoSaveFolder;
+    icon.textContent = '📁';
+    label.innerHTML = `<span class="text-gray-500 dark:text-gray-400 font-medium">Auto-guardado</span><br><span class="font-normal text-gray-400">Toca para elegir carpeta</span>`;
+  }
+}
+
+async function initAutoSave() {
+  await initIDB();
+  autoSaveDirHandle = await getHandleFromIDB();
+  if (autoSaveDirHandle) {
+    const perm = await autoSaveDirHandle.queryPermission({ mode: 'readwrite' });
+    if (perm === 'granted') {
+      await autoSaveToFile();
+    } else {
+      setAutoSaveUI('needs-permission');
+    }
+  }
+}
+
 // ─── BACKUP / RESTORE ───────────────────────────────────────────────────────
 function exportBackup() {
   const fecha = formatDate(new Date()).replace(/\//g, '-');
@@ -1660,6 +1769,7 @@ function applyInputStyles() {
 loadState();
 applyDark();
 renderPatientList();
+initAutoSave();
 </script>
 </body>
 </html>
