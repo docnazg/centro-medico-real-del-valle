@@ -353,6 +353,7 @@ function showPatientDashboard(id) {
       <button onclick="showPatientProfile('${id}')" class="btn-tab px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-blue-100 dark:hover:bg-blue-900 transition-colors">Historia Clínica</button>
       <button onclick="showLabsSection('${id}')" class="px-3 py-1.5 text-xs font-medium rounded-lg bg-purple-100 dark:bg-purple-900 hover:bg-purple-200 dark:hover:bg-purple-800 text-purple-700 dark:text-purple-300 transition-colors">Laboratorios</button>
       <button onclick="showNewVisit('${id}')" class="px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors">+ Nueva Nota</button>
+      <button onclick="showPrescriptions('${id}')" class="px-3 py-1.5 text-xs font-medium rounded-lg bg-orange-100 dark:bg-orange-900 hover:bg-orange-200 dark:hover:bg-orange-800 text-orange-700 dark:text-orange-300 transition-colors">Recetas</button>
       <button onclick="deletePatient('${id}')" class="px-3 py-1.5 text-xs font-medium rounded-lg bg-red-100 dark:bg-red-900 hover:bg-red-200 dark:hover:bg-red-800 text-red-600 dark:text-red-400 transition-colors">Eliminar Paciente</button>
     </div>
   `);
@@ -1323,6 +1324,407 @@ function deleteLab(patientId, labId) {
     saveState();
     showLabsSection(patientId);
   }
+}
+
+// ─── RECETAS ────────────────────────────────────────────────────────────────
+
+const VIA_OPTIONS = ['Oral','Sublingual','Tópica','Inhalada','Intramuscular','Intravenosa','Subcutánea','Rectal','Oftálmica','Ótica','Nasal','Transdérmica'];
+const FORMA_OPTIONS = ['Tableta','Cápsula','Solución','Suspensión','Jarabe','Cápsulas de liberación prolongada','Comprimido','Gragea','Óvulo','Supositorio','Crema','Ungüento','Gel','Parche','Spray nasal','Colirio','Gotas óticas','Polvo para suspensión','Ampolleta','Frasco ámpula','Inyectable'];
+
+function showPrescriptions(patientId) {
+  const p = state.patients.find(x => x.id === patientId);
+  if (!p) return;
+  if (!p.recetas) p.recetas = [];
+  const recetas = [...p.recetas].sort((a,b) => b.fecha.localeCompare(a.fecha));
+  const age = calcAge(p.fechaNac);
+
+  document.getElementById('mainContent').innerHTML = `
+  <div class="max-w-4xl mx-auto space-y-4">
+    <div class="flex items-center justify-between">
+      <h2 class="text-base font-bold text-gray-800 dark:text-gray-200">Recetas Médicas</h2>
+      <button onclick="showPrescriptionForm('${patientId}')"
+        class="px-4 py-2 text-sm font-medium bg-orange-600 hover:bg-orange-700 text-white rounded-lg transition-colors">
+        + Nueva Receta
+      </button>
+    </div>
+
+    ${recetas.length === 0 ? `
+      <div class="text-center py-16 text-gray-400 dark:text-gray-600">
+        <div class="text-5xl mb-3 opacity-40">℞</div>
+        <p class="text-sm">Sin recetas registradas</p>
+        <p class="text-xs mt-1">Crea la primera receta con el botón de arriba</p>
+      </div>` :
+      recetas.map(r => `
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4">
+        <div class="flex items-start justify-between">
+          <div class="flex-1">
+            <div class="flex items-center gap-2 mb-1">
+              <span class="text-xs font-bold text-orange-600 dark:text-orange-400">Receta #${r.folio}</span>
+              <span class="text-xs text-gray-500 dark:text-gray-400">${r.fecha}</span>
+            </div>
+            <p class="text-sm font-medium mb-1">${p.nombre} · ${age} años · ${p.sexo}</p>
+            <p class="text-xs text-gray-500 dark:text-gray-400 mb-2">Dx: ${r.diagnostico || '—'}</p>
+            <div class="space-y-1">
+              ${(r.medicamentos||[]).map((m,i) => `
+                <div class="text-xs bg-orange-50 dark:bg-orange-900/20 rounded px-2 py-1">
+                  <span class="font-semibold">${i+1}. ${m.generico}</span>${m.comercial ? ` (${m.comercial})` : ''}
+                  ${m.forma ? ` · ${m.forma}` : ''}${m.concentracion ? ` ${m.concentracion}` : ''}
+                  <span class="text-gray-500 dark:text-gray-400"> · ${m.dosis || ''} ${m.via ? `vía ${m.via}` : ''} ${m.frecuencia || ''} por ${m.duracion || '?'}</span>
+                  ${m.cantidad ? ` · <strong>Dispensar: ${m.cantidad}</strong>` : ''}
+                  ${m.instrucciones ? `<br><span class="text-gray-400">${m.instrucciones}</span>` : ''}
+                </div>`).join('')}
+            </div>
+          </div>
+          <div class="flex gap-2 ml-4 flex-shrink-0">
+            <button onclick="showPrescriptionForm('${patientId}','${r.id}')" class="text-xs px-2 py-1 rounded bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors">Editar</button>
+            <button onclick="printPrescription('${patientId}','${r.id}')" class="text-xs px-2 py-1 rounded bg-orange-100 dark:bg-orange-900 hover:bg-orange-200 text-orange-700 dark:text-orange-300 transition-colors">Imprimir</button>
+            <button onclick="deletePrescription('${patientId}','${r.id}')" class="text-xs px-2 py-1 rounded bg-red-100 hover:bg-red-200 text-red-600 dark:text-red-400 transition-colors">Eliminar</button>
+          </div>
+        </div>
+      </div>`).join('')}
+  </div>`;
+}
+
+let medRxCount = 0;
+function medRxRow(m, i) {
+  medRxCount = Math.max(medRxCount, i + 1);
+  const viaOpts = VIA_OPTIONS.map(v => `<option value="${v}" ${m.via===v?'selected':''}>${v}</option>`).join('');
+  const formaOpts = FORMA_OPTIONS.map(v => `<option value="${v}" ${m.forma===v?'selected':''}>${v}</option>`).join('');
+  return `<div class="border border-gray-200 dark:border-gray-600 rounded-lg p-3 space-y-2" id="medRx_${i}">
+    <div class="flex items-center justify-between mb-1">
+      <span class="text-xs font-bold text-orange-600 dark:text-orange-400">Medicamento ${i+1}</span>
+      <button onclick="document.getElementById('medRx_${i}').remove()" class="text-red-400 hover:text-red-600 text-sm">✕ Quitar</button>
+    </div>
+    <div class="grid grid-cols-2 gap-2">
+      <div>
+        <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Denominación genérica (DCI) *</label>
+        <input type="text" id="rxGenerico_${i}" value="${esc(m.generico||'')}" placeholder="Ej: Metformina" class="w-full input-base">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Nombre comercial</label>
+        <input type="text" id="rxComercial_${i}" value="${esc(m.comercial||'')}" placeholder="Ej: Glucophage (opcional)" class="w-full input-base">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Forma farmacéutica *</label>
+        <select id="rxForma_${i}" class="w-full input-base"><option value="">—</option>${formaOpts}</select>
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Concentración *</label>
+        <input type="text" id="rxConc_${i}" value="${esc(m.concentracion||'')}" placeholder="Ej: 850 mg" class="w-full input-base">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Vía de administración *</label>
+        <select id="rxVia_${i}" class="w-full input-base"><option value="">—</option>${viaOpts}</select>
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Dosis *</label>
+        <input type="text" id="rxDosis_${i}" value="${esc(m.dosis||'')}" placeholder="Ej: 1 tableta" class="w-full input-base">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Frecuencia *</label>
+        <input type="text" id="rxFreq_${i}" value="${esc(m.frecuencia||'')}" placeholder="Ej: cada 12 horas" class="w-full input-base">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Duración del tratamiento *</label>
+        <input type="text" id="rxDur_${i}" value="${esc(m.duracion||'')}" placeholder="Ej: 30 días" class="w-full input-base">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Cantidad a dispensar *</label>
+        <input type="text" id="rxCant_${i}" value="${esc(m.cantidad||'')}" placeholder="Ej: 60 tabletas / 2 cajas" class="w-full input-base">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Instrucciones especiales</label>
+        <input type="text" id="rxInst_${i}" value="${esc(m.instrucciones||'')}" placeholder="Ej: Tomar con alimentos" class="w-full input-base">
+      </div>
+    </div>
+  </div>`;
+}
+
+function addMedRx() {
+  const container = document.getElementById('medRxList');
+  const i = medRxCount++;
+  const div = document.createElement('div');
+  div.innerHTML = medRxRow({}, i);
+  container.appendChild(div.firstElementChild);
+  applyInputStyles();
+}
+
+function showPrescriptionForm(patientId, editId = null) {
+  const p = state.patients.find(x => x.id === patientId);
+  if (!p) return;
+  const existing = editId ? (p.recetas||[]).find(r => r.id === editId) : null;
+  const v = existing || {};
+  const age = calcAge(p.fechaNac);
+  medRxCount = 0;
+  const meds = (v.medicamentos || [{}]);
+
+  document.getElementById('mainContent').innerHTML = `
+  <div class="max-w-3xl mx-auto">
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 space-y-6">
+      <div class="flex items-center gap-3">
+        <button onclick="showPrescriptions('${patientId}')" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-lg">←</button>
+        <h2 class="text-lg font-bold text-gray-800 dark:text-gray-200">${editId ? 'Editar Receta' : 'Nueva Receta Médica'}</h2>
+      </div>
+
+      <!-- DATOS DEL PACIENTE (solo lectura) -->
+      <div class="bg-orange-50 dark:bg-orange-900/20 rounded-lg p-3 text-xs">
+        <p class="font-semibold text-orange-700 dark:text-orange-400 mb-1">Paciente</p>
+        <div class="grid grid-cols-3 gap-2 text-gray-700 dark:text-gray-300">
+          <div><span class="text-gray-500 dark:text-gray-400">Nombre:</span> ${p.nombre}</div>
+          <div><span class="text-gray-500 dark:text-gray-400">Edad:</span> ${age} años</div>
+          <div><span class="text-gray-500 dark:text-gray-400">Sexo:</span> ${p.sexo}</div>
+        </div>
+      </div>
+
+      <!-- DATOS DE LA RECETA -->
+      <section>
+        <h3 class="section-heading">Datos de la Receta</h3>
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Fecha *</label>
+            <input type="date" id="rxFecha" value="${v.fecha || formatDate(new Date())}" class="w-full input-base">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Peso del paciente (kg)</label>
+            <input type="number" step="0.1" id="rxPeso" value="${esc(String(v.peso||p.visitas?.slice(-1)[0]?.peso||''))}" placeholder="kg" class="w-full input-base">
+          </div>
+          <div class="col-span-2">
+            <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Diagnóstico *</label>
+            <input type="text" id="rxDiagnostico" value="${esc(v.diagnostico||'')}" placeholder="Diagnóstico principal" class="w-full input-base">
+          </div>
+        </div>
+      </section>
+
+      <!-- MEDICAMENTOS -->
+      <section>
+        <h3 class="section-heading">Medicamentos Prescritos</h3>
+        <div id="medRxList" class="space-y-3 mb-3">
+          ${meds.map((m,i) => medRxRow(m,i)).join('')}
+        </div>
+        <button type="button" onclick="addMedRx()"
+          class="w-full py-2 text-sm text-orange-600 dark:text-orange-400 border-2 border-dashed border-orange-200 dark:border-orange-800 rounded-lg hover:border-orange-400 dark:hover:border-orange-600 transition-colors">
+          + Agregar otro medicamento
+        </button>
+      </section>
+
+      <!-- INDICACIONES GENERALES -->
+      <section>
+        <h3 class="section-heading">Indicaciones Generales</h3>
+        <textarea id="rxIndicaciones" rows="3" placeholder="Dieta, reposo, cuidados generales, cuándo regresar..."
+          class="w-full input-base resize-y">${esc(v.indicaciones||'')}</textarea>
+      </section>
+
+      <!-- DATOS DEL CONSULTORIO (para impresión) -->
+      <section>
+        <h3 class="section-heading">Datos de Contacto del Consultorio (para impresión)</h3>
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Teléfono</label>
+            <input type="text" id="rxTelefono" value="${esc(v.telefono||state.consultorioTel||'')}" placeholder="Ej: 674-825-0000" class="w-full input-base">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Dirección del consultorio</label>
+            <input type="text" id="rxDireccion" value="${esc(v.direccion||state.consultorioDir||'')}" placeholder="Calle, número, colonia" class="w-full input-base">
+          </div>
+        </div>
+      </section>
+
+      <div class="flex gap-3 pt-2">
+        <button onclick="savePrescription('${patientId}','${editId||''}')"
+          class="flex-1 py-2.5 bg-orange-600 hover:bg-orange-700 text-white font-medium rounded-lg transition-colors">
+          ${editId ? 'Guardar Cambios' : 'Guardar Receta'}
+        </button>
+        <button onclick="saveAndPrintPrescription('${patientId}','${editId||''}')"
+          class="px-4 py-2.5 bg-green-600 hover:bg-green-700 text-white font-medium rounded-lg transition-colors">
+          Guardar e Imprimir
+        </button>
+        <button onclick="showPrescriptions('${patientId}')"
+          class="px-4 py-2.5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 font-medium rounded-lg transition-colors">
+          Cancelar
+        </button>
+      </div>
+    </div>
+  </div>`;
+  applyInputStyles();
+}
+
+function savePrescription(patientId, editId) {
+  const p = state.patients.find(x => x.id === patientId);
+  if (!p) return;
+  if (!p.recetas) p.recetas = [];
+
+  const fecha = document.getElementById('rxFecha')?.value;
+  const diagnostico = gv('rxDiagnostico');
+  if (!fecha || !diagnostico) { alert('Fecha y diagnóstico son obligatorios.'); return; }
+
+  const medicamentos = [];
+  document.querySelectorAll('[id^="rxGenerico_"]').forEach(el => {
+    const i = el.id.split('_')[1];
+    const generico = el.value.trim();
+    if (!generico) return;
+    medicamentos.push({
+      generico,
+      comercial: gv(`rxComercial_${i}`),
+      forma: document.getElementById(`rxForma_${i}`)?.value || '',
+      concentracion: gv(`rxConc_${i}`),
+      via: document.getElementById(`rxVia_${i}`)?.value || '',
+      dosis: gv(`rxDosis_${i}`),
+      frecuencia: gv(`rxFreq_${i}`),
+      duracion: gv(`rxDur_${i}`),
+      cantidad: gv(`rxCant_${i}`),
+      instrucciones: gv(`rxInst_${i}`),
+    });
+  });
+
+  if (medicamentos.length === 0) { alert('Agrega al menos un medicamento.'); return; }
+
+  const tel = gv('rxTelefono');
+  const dir = gv('rxDireccion');
+  if (tel) state.consultorioTel = tel;
+  if (dir) state.consultorioDir = dir;
+
+  const data = {
+    fecha, diagnostico, medicamentos,
+    peso: gv('rxPeso'),
+    indicaciones: gv('rxIndicaciones'),
+    telefono: tel, direccion: dir,
+  };
+
+  if (editId) {
+    const idx = p.recetas.findIndex(r => r.id === editId);
+    if (idx >= 0) p.recetas[idx] = { ...p.recetas[idx], ...data };
+  } else {
+    data.id = uid();
+    data.folio = state.folioCounter++;
+    data.creadoEn = new Date().toISOString();
+    p.recetas.push(data);
+  }
+
+  saveState();
+  showPrescriptions(patientId);
+  return editId ? p.recetas.find(r => r.id === editId) : p.recetas[p.recetas.length - 1];
+}
+
+function saveAndPrintPrescription(patientId, editId) {
+  const r = savePrescription(patientId, editId);
+  if (r) {
+    const p = state.patients.find(x => x.id === patientId);
+    doPrintPrescription(p, r);
+  }
+}
+
+function printPrescription(patientId, recetaId) {
+  const p = state.patients.find(x => x.id === patientId);
+  const r = (p?.recetas||[]).find(x => x.id === recetaId);
+  if (p && r) doPrintPrescription(p, r);
+}
+
+function deletePrescription(patientId, recetaId) {
+  if (!confirm('¿Eliminar esta receta?')) return;
+  const p = state.patients.find(x => x.id === patientId);
+  if (p) {
+    p.recetas = (p.recetas||[]).filter(r => r.id !== recetaId);
+    saveState();
+    showPrescriptions(patientId);
+  }
+}
+
+function doPrintPrescription(p, r) {
+  const age = calcAge(p.fechaNac);
+  const emision = `${formatDate(new Date())} ${formatTime(new Date())}`;
+  const tel = r.telefono || state.consultorioTel || '';
+  const dir = r.direccion || state.consultorioDir || '';
+
+  const medsHTML = (r.medicamentos||[]).map((m, i) => `
+    <div style="margin-bottom:12px;padding-bottom:10px;border-bottom:1px dashed #ccc;">
+      <div style="font-size:12pt;font-weight:bold;">
+        ℞${i+1}. ${m.generico.toUpperCase()}
+        ${m.comercial ? `<span style="font-size:9pt;font-weight:normal;"> (${m.comercial})</span>` : ''}
+      </div>
+      <div style="font-size:10pt;margin-top:2px;">
+        ${m.forma ? `${m.forma}` : ''}${m.concentracion ? ` ${m.concentracion}` : ''}
+        ${m.via ? ` · Vía ${m.via}` : ''}
+      </div>
+      <div style="font-size:10pt;margin-top:3px;">
+        <strong>Sig.:</strong> ${m.dosis || ''} ${m.frecuencia ? `· ${m.frecuencia}` : ''} ${m.duracion ? `· durante ${m.duracion}` : ''}
+      </div>
+      ${m.instrucciones ? `<div style="font-size:9.5pt;color:#555;margin-top:2px;">${m.instrucciones}</div>` : ''}
+      ${m.cantidad ? `<div style="font-size:10pt;margin-top:3px;"><strong>Dispensar:</strong> ${m.cantidad}</div>` : ''}
+    </div>`).join('');
+
+  const html = `
+  <div style="font-family:'Times New Roman',serif;font-size:11pt;color:#000;max-width:18cm;margin:0 auto;">
+
+    <!-- ENCABEZADO -->
+    <div style="display:grid;grid-template-columns:1fr auto;align-items:start;border-bottom:3px solid #000;padding-bottom:8px;margin-bottom:12px;">
+      <div>
+        <div style="font-size:18pt;font-weight:bold;line-height:1.1;">Centro Médico Real del Valle</div>
+        <div style="font-size:10pt;margin-top:2px;">Dr. Noé Alejandro Zúñiga González</div>
+        <div style="font-size:9pt;color:#444;">Médico Cirujano · Cédula Profesional: 12741802</div>
+        ${dir ? `<div style="font-size:9pt;color:#444;">${dir}</div>` : '<div style="font-size:9pt;color:#444;">Canatlán, Durango</div>'}
+        ${tel ? `<div style="font-size:9pt;color:#444;">Tel: ${tel}</div>` : ''}
+      </div>
+      <div style="text-align:right;">
+        <div style="font-size:9pt;font-weight:bold;">RECETA MÉDICA</div>
+        <div style="font-size:9pt;">Folio: <strong>#${r.folio}</strong></div>
+        <div style="font-size:9pt;">Fecha: <strong>${r.fecha}</strong></div>
+      </div>
+    </div>
+
+    <!-- DATOS DEL PACIENTE -->
+    <div style="background:#f8f8f8;border:1px solid #ddd;border-radius:4px;padding:8px;margin-bottom:12px;font-size:10pt;">
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;">
+        <div><strong>Paciente:</strong><br>${p.nombre}</div>
+        <div><strong>Edad:</strong><br>${age} años</div>
+        <div><strong>Sexo:</strong><br>${p.sexo}</div>
+        <div><strong>Peso:</strong><br>${r.peso ? r.peso + ' kg' : '—'}</div>
+      </div>
+      <div style="margin-top:4px;"><strong>Diagnóstico:</strong> ${r.diagnostico}</div>
+    </div>
+
+    <!-- MEDICAMENTOS -->
+    <div style="margin-bottom:12px;">
+      ${medsHTML}
+    </div>
+
+    <!-- INDICACIONES GENERALES -->
+    ${r.indicaciones ? `
+    <div style="margin-bottom:14px;font-size:10pt;">
+      <div style="font-weight:bold;margin-bottom:3px;">Indicaciones generales:</div>
+      <div>${r.indicaciones.replace(/
+/g,'<br>')}</div>
+    </div>` : ''}
+
+    <!-- AVISO LEGAL -->
+    <div style="font-size:8pt;color:#666;border-top:1px solid #ccc;padding-top:6px;margin-bottom:14px;">
+      Esta receta es válida por 30 días a partir de la fecha de emisión, excepto para medicamentos de control especial.
+      La dispensación de medicamentos sujetos a prescripción médica requiere presentar esta receta al farmacéutico.
+      Denominación genérica prescrita conforme a la NOM-072-SSA1-2012.
+    </div>
+
+    <!-- FIRMA -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:30px;margin-top:10px;font-size:10pt;">
+      <div style="text-align:center;">
+        <div style="border-bottom:1px solid #000;height:45px;margin-bottom:4px;"></div>
+        <div><strong>Dr. Noé Alejandro Zúñiga González</strong></div>
+        <div>Médico Cirujano</div>
+        <div>Cédula Profesional: 12741802</div>
+        <div>SSA / COFEPRIS</div>
+      </div>
+      <div style="text-align:center;">
+        <div style="border-bottom:1px solid #000;height:45px;margin-bottom:4px;"></div>
+        <div><strong>Sello del consultorio</strong></div>
+        <div style="height:30px;border:1px dashed #ccc;border-radius:50%;width:80px;margin:4px auto;"></div>
+      </div>
+    </div>
+
+    <!-- PIE -->
+    <div style="text-align:center;margin-top:8px;font-size:7.5pt;color:#999;">
+      Documento generado el ${emision} · Centro Médico Real del Valle · Canatlán, Durango
+    </div>
+  </div>`;
+
+  renderPrint(html);
 }
 
 function deletePatient(id) {
