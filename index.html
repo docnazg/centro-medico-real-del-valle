@@ -1663,9 +1663,12 @@ async function autoSaveToFile() {
     if (perm !== 'granted') { setAutoSaveUI('needs-permission'); return; }
     const fileHandle = await autoSaveDirHandle.getFileHandle('CMRV_datos.json', { create: true });
     const writable = await fileHandle.createWritable();
+    const now = new Date();
+    state.lastAutoSave = now.toISOString();
     await writable.write(JSON.stringify(state, null, 2));
     await writable.close();
-    setAutoSaveUI('ok', autoSaveDirHandle.name);
+    localStorage.setItem(DB_KEY, JSON.stringify(state));
+    setAutoSaveUI('ok', autoSaveDirHandle.name, now);
   } catch(e) {
     console.warn('Auto-save error:', e);
     setAutoSaveUI('needs-permission');
@@ -1695,21 +1698,24 @@ async function reactivateAutoSave() {
   } catch(e) { console.warn(e); }
 }
 
-function setAutoSaveUI(status, folderName = '') {
+function setAutoSaveUI(status, folderName = '', ts = null) {
   const widget = document.getElementById('autoSaveWidget');
   const icon = document.getElementById('autoSaveIcon');
   const label = document.getElementById('autoSaveLabel');
   if (!widget) return;
+  // Resolve timestamp: use passed ts, or state.lastAutoSave, or nothing
+  const saved = ts || (state.lastAutoSave ? new Date(state.lastAutoSave) : null);
+  const tsStr = saved ? saved.toLocaleDateString('es-MX', {day:'2-digit',month:'2-digit',year:'numeric'}) + ' ' + saved.toLocaleTimeString('es-MX', {hour:'2-digit',minute:'2-digit'}) : null;
   if (status === 'ok') {
-    widget.className = 'rounded-lg border border-green-400 dark:border-green-600 bg-green-50 dark:bg-green-900/20 p-2 text-xs text-center transition-colors';
+    widget.className = 'rounded-lg border border-green-400 dark:border-green-600 bg-green-50 dark:bg-green-900/20 p-2 text-xs text-center transition-colors cursor-pointer';
     widget.onclick = selectAutoSaveFolder;
     icon.textContent = '✅';
-    label.innerHTML = `<span class="text-green-700 dark:text-green-400 font-medium">Auto-guardado activo</span><br><span class="text-green-600 dark:text-green-500 font-normal truncate block max-w-full">${folderName}</span>`;
+    label.innerHTML = `<span class="text-green-700 dark:text-green-400 font-medium">Auto-guardado activo</span><br><span class="text-green-600 dark:text-green-500 font-normal truncate block max-w-full">${folderName}</span>${tsStr ? `<span class="text-green-500 dark:text-green-600 font-normal block mt-0.5">Último: ${tsStr}</span>` : ''}`;
   } else if (status === 'needs-permission') {
     widget.className = 'rounded-lg border border-yellow-400 dark:border-yellow-600 bg-yellow-50 dark:bg-yellow-900/20 p-2 text-xs text-center cursor-pointer hover:border-yellow-500 transition-colors';
     widget.onclick = reactivateAutoSave;
     icon.textContent = '⚠️';
-    label.innerHTML = `<span class="text-yellow-700 dark:text-yellow-400 font-medium">Permiso requerido</span><br><span class="text-yellow-600 dark:text-yellow-500 font-normal">Toca para reactivar</span>`;
+    label.innerHTML = `<span class="text-yellow-700 dark:text-yellow-400 font-medium">Permiso requerido</span><br><span class="text-yellow-600 dark:text-yellow-500 font-normal">Toca para reactivar</span>${tsStr ? `<span class="text-yellow-500 dark:text-yellow-600 font-normal block mt-0.5">Último: ${tsStr}</span>` : ''}`;
   } else {
     widget.className = 'rounded-lg border border-dashed border-gray-300 dark:border-gray-600 p-2 text-xs text-center cursor-pointer hover:border-blue-400 dark:hover:border-blue-500 transition-colors';
     widget.onclick = selectAutoSaveFolder;
