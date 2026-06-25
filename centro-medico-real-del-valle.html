@@ -6,6 +6,7 @@
 <title>Centro Médico Real del Valle</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
 tailwind.config = {
   darkMode: 'class',
@@ -214,6 +215,7 @@ function showPatientDashboard(id) {
     </div>
     <div class="flex gap-2 flex-shrink-0">
       <button onclick="showPatientProfile('${id}')" class="btn-tab px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-blue-100 dark:hover:bg-blue-900 transition-colors">Historia Clínica</button>
+      <button onclick="showLabsSection('${id}')" class="px-3 py-1.5 text-xs font-medium rounded-lg bg-purple-100 dark:bg-purple-900 hover:bg-purple-200 dark:hover:bg-purple-800 text-purple-700 dark:text-purple-300 transition-colors">Laboratorios</button>
       <button onclick="showNewVisit('${id}')" class="px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors">+ Nueva Nota</button>
       <button onclick="deletePatient('${id}')" class="px-3 py-1.5 text-xs font-medium rounded-lg bg-red-100 dark:bg-red-900 hover:bg-red-200 dark:hover:bg-red-800 text-red-600 dark:text-red-400 transition-colors">Eliminar Paciente</button>
     </div>
@@ -761,6 +763,429 @@ function saveAndPrintVisit(patientId, editVisitId) {
   if (v) {
     const p = state.patients.find(x => x.id === patientId);
     doPrintVisit(p, v);
+  }
+}
+
+// ─── LABORATORIOS ───────────────────────────────────────────────────────────
+
+const LAB_FIELDS = [
+  { group: 'Biometría Hemática', fields: [
+    { id: 'hemoglobina',  label: 'Hemoglobina',  unit: 'g/dL',     refMin: 12,   refMax: 17.5, color: '#ef4444' },
+    { id: 'hematocrito',  label: 'Hematocrito',  unit: '%',         refMin: 36,   refMax: 52,   color: '#f97316' },
+    { id: 'leucocitos',   label: 'Leucocitos',   unit: 'x10³/µL',  refMin: 4.5,  refMax: 11,   color: '#eab308' },
+    { id: 'plaquetas',    label: 'Plaquetas',    unit: 'x10³/µL',  refMin: 150,  refMax: 400,  color: '#84cc16' },
+  ]},
+  { group: 'Glucosa y Diabetes', fields: [
+    { id: 'glucosaLab',   label: 'Glucosa ayuno', unit: 'mg/dL',   refMin: 70,   refMax: 100,  color: '#f59e0b' },
+    { id: 'hba1c',        label: 'HbA1c',         unit: '%',        refMin: null, refMax: 5.7,  color: '#f97316' },
+  ]},
+  { group: 'Perfil de Lípidos', fields: [
+    { id: 'colesterolTotal', label: 'Colesterol total', unit: 'mg/dL', refMin: null, refMax: 200, color: '#8b5cf6' },
+    { id: 'ldl',           label: 'LDL',           unit: 'mg/dL',    refMin: null, refMax: 100,  color: '#ec4899' },
+    { id: 'hdl',           label: 'HDL',           unit: 'mg/dL',    refMin: 40,   refMax: null, color: '#06b6d4' },
+    { id: 'trigliceridos', label: 'Triglicéridos', unit: 'mg/dL',    refMin: null, refMax: 150,  color: '#10b981' },
+  ]},
+  { group: 'Función Renal', fields: [
+    { id: 'creatinina',   label: 'Creatinina',   unit: 'mg/dL',    refMin: 0.6,  refMax: 1.2,  color: '#3b82f6' },
+    { id: 'bun',          label: 'BUN',           unit: 'mg/dL',    refMin: 7,    refMax: 20,   color: '#6366f1' },
+    { id: 'acidoUrico',   label: 'Ácido úrico',  unit: 'mg/dL',    refMin: 2.4,  refMax: 7.0,  color: '#a855f7' },
+  ]},
+  { group: 'Función Hepática', fields: [
+    { id: 'tgo',          label: 'TGO/AST',      unit: 'U/L',       refMin: null, refMax: 40,   color: '#14b8a6' },
+    { id: 'tgp',          label: 'TGP/ALT',      unit: 'U/L',       refMin: null, refMax: 40,   color: '#0ea5e9' },
+  ]},
+  { group: 'Tiroides', fields: [
+    { id: 'tsh',          label: 'TSH',          unit: 'mUI/L',     refMin: 0.4,  refMax: 4.0,  color: '#f43f5e' },
+  ]},
+  { group: 'Electrolitos', fields: [
+    { id: 'sodio',        label: 'Sodio',        unit: 'mEq/L',     refMin: 136,  refMax: 145,  color: '#fb923c' },
+    { id: 'potasio',      label: 'Potasio',      unit: 'mEq/L',     refMin: 3.5,  refMax: 5.0,  color: '#4ade80' },
+  ]},
+];
+
+// Flat list for easy lookup
+const LAB_FLAT = LAB_FIELDS.flatMap(g => g.fields);
+
+let activeCharts = {};
+
+function showLabsSection(patientId) {
+  const p = state.patients.find(x => x.id === patientId);
+  if (!p) return;
+  if (!p.laboratorios) p.laboratorios = [];
+
+  // Destroy existing charts
+  Object.values(activeCharts).forEach(c => c.destroy());
+  activeCharts = {};
+
+  const labs = [...p.laboratorios].sort((a,b) => a.fecha.localeCompare(b.fecha));
+
+  // Which fields have at least one value?
+  const hasData = LAB_FLAT.filter(f => labs.some(l => l[f.id] !== '' && l[f.id] !== undefined && l[f.id] !== null));
+
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `
+  <div class="max-w-5xl mx-auto space-y-6">
+    <!-- Header row -->
+    <div class="flex items-center justify-between">
+      <h2 class="text-base font-bold text-gray-800 dark:text-gray-200">Resultados de Laboratorio</h2>
+      <button onclick="showAddLabForm('${patientId}')"
+        class="px-4 py-2 text-sm font-medium bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors">
+        + Agregar Resultados
+      </button>
+    </div>
+
+    ${labs.length === 0 ? `
+      <div class="text-center py-16 text-gray-400 dark:text-gray-600">
+        <svg class="w-14 h-14 mx-auto mb-3 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"/>
+        </svg>
+        <p class="text-sm">Sin resultados de laboratorio registrados</p>
+        <p class="text-xs mt-1">Agrega el primer resultado con el botón de arriba</p>
+      </div>` : `
+
+    <!-- GRÁFICAS -->
+    ${hasData.length > 0 ? `
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4">
+      <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4">Tendencias en el Tiempo</h3>
+      <div id="chartsGrid" class="grid grid-cols-2 gap-6">
+        ${hasData.map(f => `
+          <div class="relative">
+            <p class="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">${f.label} <span class="font-normal text-gray-400">(${f.unit})</span></p>
+            <div style="height:160px;position:relative;">
+              <canvas id="chart_${f.id}"></canvas>
+            </div>
+          </div>`).join('')}
+      </div>
+    </div>` : ''}
+
+    <!-- También graficamos signos vitales de visitas -->
+    ${buildVitalsChartsHTML(p)}
+
+    <!-- TABLA DE RESULTADOS -->
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
+      <div class="p-4 border-b border-gray-200 dark:border-gray-700">
+        <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300">Historial de Resultados</h3>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-xs">
+          <thead class="bg-gray-50 dark:bg-gray-700">
+            <tr>
+              <th class="px-3 py-2 text-left font-medium text-gray-500 dark:text-gray-400 sticky left-0 bg-gray-50 dark:bg-gray-700">Fecha</th>
+              ${LAB_FLAT.filter(f => labs.some(l => l[f.id])).map(f =>
+                `<th class="px-3 py-2 text-left font-medium text-gray-500 dark:text-gray-400 whitespace-nowrap">${f.label}<br><span class="font-normal">${f.unit}</span></th>`
+              ).join('')}
+              <th class="px-3 py-2 text-left font-medium text-gray-500 dark:text-gray-400">Notas</th>
+              <th class="px-3 py-2"></th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+            ${[...labs].reverse().map(l => `
+            <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+              <td class="px-3 py-2 font-medium whitespace-nowrap sticky left-0 bg-white dark:bg-gray-800">${l.fecha}</td>
+              ${LAB_FLAT.filter(f => labs.some(lb => lb[f.id])).map(f => {
+                const val = l[f.id];
+                const flag = val !== '' && val !== undefined && val !== null ? getFlag(f, parseFloat(val)) : '';
+                return `<td class="px-3 py-2 whitespace-nowrap ${flag === '↑' ? 'text-red-600 dark:text-red-400 font-semibold' : flag === '↓' ? 'text-blue-600 dark:text-blue-400 font-semibold' : ''}">${val || '—'}${flag ? ` <span class="text-xs">${flag}</span>` : ''}</td>`;
+              }).join('')}
+              <td class="px-3 py-2 text-gray-500 dark:text-gray-400">${l.notas||'—'}</td>
+              <td class="px-3 py-2 whitespace-nowrap">
+                <button onclick="showAddLabForm('${patientId}','${l.id}')" class="text-blue-500 hover:text-blue-700 mr-2">Editar</button>
+                <button onclick="deleteLab('${patientId}','${l.id}')" class="text-red-400 hover:text-red-600">Eliminar</button>
+              </td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    `}
+  </div>`;
+
+  // Render charts after DOM is ready
+  if (labs.length > 0) {
+    setTimeout(() => {
+      renderLabCharts(labs, hasData);
+      renderVitalsCharts(p);
+    }, 50);
+  }
+}
+
+function getFlag(field, val) {
+  if (isNaN(val)) return '';
+  if (field.refMax !== null && val > field.refMax) return '↑';
+  if (field.refMin !== null && val < field.refMin) return '↓';
+  return '';
+}
+
+function buildVitalsChartsHTML(p) {
+  const visits = (p.visitas || []).filter(v => v.peso || v.taSistolica || v.glucosa);
+  if (visits.length < 2) return '';
+  return `
+  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4">
+    <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4">Signos Vitales (de notas de visita)</h3>
+    <div class="grid grid-cols-2 gap-6">
+      ${visits.some(v=>v.peso) ? `<div><p class="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Peso <span class="font-normal text-gray-400">(kg)</span></p><div style="height:160px;position:relative;"><canvas id="chart_peso"></canvas></div></div>` : ''}
+      ${visits.some(v=>v.taSistolica) ? `<div><p class="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Presión Arterial <span class="font-normal text-gray-400">(mmHg)</span></p><div style="height:160px;position:relative;"><canvas id="chart_ta"></canvas></div></div>` : ''}
+      ${visits.some(v=>v.glucosa) ? `<div><p class="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Glucosa capilar <span class="font-normal text-gray-400">(mg/dL)</span></p><div style="height:160px;position:relative;"><canvas id="chart_glucosaVisita"></canvas></div></div>` : ''}
+      ${visits.some(v=>v.imc) ? `<div><p class="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">IMC <span class="font-normal text-gray-400">(kg/m²)</span></p><div style="height:160px;position:relative;"><canvas id="chart_imc"></canvas></div></div>` : ''}
+    </div>
+  </div>`;
+}
+
+function renderLabCharts(labs, fields) {
+  const isDark = state.darkMode;
+  const gridColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)';
+  const textColor = isDark ? '#9ca3af' : '#6b7280';
+
+  const defaultOpts = (title, unit, refMin, refMax, color) => ({
+    type: 'line',
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => `${ctx.parsed.y} ${unit}`
+          }
+        }
+      },
+      scales: {
+        x: {
+          ticks: { color: textColor, font: { size: 9 }, maxRotation: 30 },
+          grid: { color: gridColor }
+        },
+        y: {
+          ticks: { color: textColor, font: { size: 9 } },
+          grid: { color: gridColor }
+        }
+      }
+    }
+  });
+
+  fields.forEach(f => {
+    const canvas = document.getElementById(`chart_${f.id}`);
+    if (!canvas) return;
+    const pts = labs
+      .filter(l => l[f.id] !== '' && l[f.id] !== undefined && l[f.id] !== null)
+      .map(l => ({ x: l.fecha, y: parseFloat(l[f.id]) }));
+
+    const annotations = [];
+    const refDatasets = [];
+
+    if (f.refMax !== null) {
+      refDatasets.push({
+        label: `Ref max (${f.refMax})`,
+        data: pts.map(p => f.refMax),
+        borderColor: 'rgba(239,68,68,0.4)',
+        borderDash: [4,4],
+        borderWidth: 1,
+        pointRadius: 0,
+        fill: false,
+      });
+    }
+    if (f.refMin !== null) {
+      refDatasets.push({
+        label: `Ref min (${f.refMin})`,
+        data: pts.map(p => f.refMin),
+        borderColor: 'rgba(59,130,246,0.4)',
+        borderDash: [4,4],
+        borderWidth: 1,
+        pointRadius: 0,
+        fill: false,
+      });
+    }
+
+    const chart = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels: pts.map(p => p.x),
+        datasets: [
+          {
+            data: pts.map(p => p.y),
+            borderColor: f.color,
+            backgroundColor: f.color + '22',
+            borderWidth: 2,
+            pointRadius: 4,
+            pointHoverRadius: 6,
+            fill: true,
+            tension: 0.3,
+          },
+          ...refDatasets
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: ctx => `${ctx.parsed.y} ${f.unit}` } }
+        },
+        scales: {
+          x: { ticks: { color: textColor, font: { size: 9 }, maxRotation: 30 }, grid: { color: gridColor } },
+          y: { ticks: { color: textColor, font: { size: 9 } }, grid: { color: gridColor } }
+        }
+      }
+    });
+    activeCharts[f.id] = chart;
+  });
+}
+
+function renderVitalsCharts(p) {
+  const isDark = state.darkMode;
+  const gridColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)';
+  const textColor = isDark ? '#9ca3af' : '#6b7280';
+  const visits = [...(p.visitas||[])].sort((a,b) => a.fecha.localeCompare(b.fecha));
+
+  const makeChart = (id, datasets, labels) => {
+    const canvas = document.getElementById(id);
+    if (!canvas) return;
+    const c = new Chart(canvas, {
+      type: 'line',
+      data: { labels, datasets },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: datasets.length > 1, labels: { color: textColor, font: { size: 9 }, boxWidth: 10 } }, tooltip: {} },
+        scales: {
+          x: { ticks: { color: textColor, font: { size: 9 }, maxRotation: 30 }, grid: { color: gridColor } },
+          y: { ticks: { color: textColor, font: { size: 9 } }, grid: { color: gridColor } }
+        }
+      }
+    });
+    activeCharts[id] = c;
+  };
+
+  // Peso
+  const pesoVisits = visits.filter(v => v.peso);
+  if (pesoVisits.length >= 2) {
+    makeChart('chart_peso',
+      [{ data: pesoVisits.map(v => parseFloat(v.peso)), borderColor: '#f59e0b', backgroundColor: '#f59e0b22', borderWidth: 2, pointRadius: 4, fill: true, tension: 0.3 }],
+      pesoVisits.map(v => v.fecha));
+  }
+
+  // TA
+  const taVisits = visits.filter(v => v.taSistolica);
+  if (taVisits.length >= 2) {
+    makeChart('chart_ta', [
+      { label: 'Sistólica', data: taVisits.map(v => parseFloat(v.taSistolica)), borderColor: '#ef4444', backgroundColor: '#ef444422', borderWidth: 2, pointRadius: 4, fill: false, tension: 0.3 },
+      { label: 'Diastólica', data: taVisits.map(v => parseFloat(v.taDiastolica||0)), borderColor: '#3b82f6', backgroundColor: '#3b82f622', borderWidth: 2, pointRadius: 4, fill: false, tension: 0.3 },
+    ], taVisits.map(v => v.fecha));
+  }
+
+  // Glucosa capilar
+  const gluVisits = visits.filter(v => v.glucosa);
+  if (gluVisits.length >= 2) {
+    makeChart('chart_glucosaVisita',
+      [{ data: gluVisits.map(v => parseFloat(v.glucosa)), borderColor: '#f97316', backgroundColor: '#f9731622', borderWidth: 2, pointRadius: 4, fill: true, tension: 0.3 }],
+      gluVisits.map(v => v.fecha));
+  }
+
+  // IMC
+  const imcVisits = visits.filter(v => v.imc);
+  if (imcVisits.length >= 2) {
+    makeChart('chart_imc',
+      [{ data: imcVisits.map(v => parseFloat(v.imc)), borderColor: '#8b5cf6', backgroundColor: '#8b5cf622', borderWidth: 2, pointRadius: 4, fill: true, tension: 0.3 }],
+      imcVisits.map(v => v.fecha));
+  }
+}
+
+function showAddLabForm(patientId, editId = null) {
+  const p = state.patients.find(x => x.id === patientId);
+  if (!p) return;
+  const existing = editId ? (p.laboratorios||[]).find(l => l.id === editId) : null;
+  const v = existing || {};
+
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `
+  <div class="max-w-3xl mx-auto">
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 space-y-6">
+      <div class="flex items-center gap-3">
+        <button onclick="showLabsSection('${patientId}')" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-lg leading-none">←</button>
+        <h2 class="text-lg font-bold text-gray-800 dark:text-gray-200">${editId ? 'Editar Resultado' : 'Agregar Resultados de Laboratorio'}</h2>
+      </div>
+
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Fecha del resultado *</label>
+          <input type="date" id="labFecha" value="${v.fecha || formatDate(new Date())}" class="w-full input-base">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Laboratorio / Institución</label>
+          <input type="text" id="labInstitucion" value="${esc(v.institucion||'')}" placeholder="Nombre del laboratorio" class="w-full input-base">
+        </div>
+      </div>
+
+      ${LAB_FIELDS.map(g => `
+      <section>
+        <h3 class="section-heading">${g.group}</h3>
+        <div class="grid grid-cols-3 gap-4">
+          ${g.fields.map(f => `
+          <div>
+            <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+              ${f.label}
+              <span class="font-normal text-gray-400">${f.unit}</span>
+              ${f.refMin !== null || f.refMax !== null ? `<span class="font-normal text-gray-300 dark:text-gray-600"> · ref: ${f.refMin ?? ''}${f.refMin !== null && f.refMax !== null ? '–' : ''}${f.refMax !== null ? f.refMax : '+'}</span>` : ''}
+            </label>
+            <input type="number" step="any" id="lab_${f.id}" value="${esc(String(v[f.id]??''))}"
+              placeholder="—" class="w-full input-base">
+          </div>`).join('')}
+        </div>
+      </section>`).join('')}
+
+      <section>
+        <h3 class="section-heading">Observaciones del Laboratorio</h3>
+        <textarea id="labNotas" rows="3" placeholder="Comentarios del laboratorio, contexto clínico, etc."
+          class="w-full input-base resize-y">${esc(v.notas||'')}</textarea>
+      </section>
+
+      <div class="flex gap-3 pt-2">
+        <button onclick="saveLab('${patientId}','${editId||''}')"
+          class="flex-1 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-medium rounded-lg transition-colors">
+          ${editId ? 'Guardar Cambios' : 'Guardar Resultados'}
+        </button>
+        <button onclick="showLabsSection('${patientId}')"
+          class="px-4 py-2.5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 font-medium rounded-lg transition-colors">
+          Cancelar
+        </button>
+      </div>
+    </div>
+  </div>`;
+  applyInputStyles();
+}
+
+function saveLab(patientId, editId) {
+  const p = state.patients.find(x => x.id === patientId);
+  if (!p) return;
+  if (!p.laboratorios) p.laboratorios = [];
+
+  const fecha = document.getElementById('labFecha')?.value;
+  if (!fecha) { alert('Selecciona la fecha del resultado.'); return; }
+
+  const data = { fecha, institucion: gv('labInstitucion'), notas: gv('labNotas') };
+  LAB_FLAT.forEach(f => {
+    const val = document.getElementById(`lab_${f.id}`)?.value?.trim();
+    data[f.id] = val !== '' ? val : '';
+  });
+
+  if (editId) {
+    const idx = p.laboratorios.findIndex(l => l.id === editId);
+    if (idx >= 0) p.laboratorios[idx] = { ...p.laboratorios[idx], ...data };
+  } else {
+    data.id = uid();
+    data.creadoEn = new Date().toISOString();
+    p.laboratorios.push(data);
+  }
+
+  saveState();
+  showLabsSection(patientId);
+}
+
+function deleteLab(patientId, labId) {
+  if (!confirm('¿Eliminar este resultado de laboratorio?')) return;
+  const p = state.patients.find(x => x.id === patientId);
+  if (p) {
+    p.laboratorios = (p.laboratorios||[]).filter(l => l.id !== labId);
+    saveState();
+    showLabsSection(patientId);
   }
 }
 
