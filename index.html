@@ -1691,8 +1691,7 @@ function doPrintPrescription(p, r) {
     ${r.indicaciones ? `
     <div style="margin-bottom:14px;font-size:10pt;">
       <div style="font-weight:bold;margin-bottom:3px;">Indicaciones generales:</div>
-      <div>${r.indicaciones.replace(/
-/g,'<br>')}</div>
+      <div>${r.indicaciones.split('\n').join('<br>')}</div>
     </div>` : ''}
 
     <!-- AVISO LEGAL -->
@@ -1844,7 +1843,7 @@ function doPrintVisit(p, v) {
     <!-- PLAN DE MANEJO -->
     <div style="margin-bottom:10px;">
       <div style="font-weight:bold;text-transform:uppercase;border-bottom:1px solid #000;margin-bottom:4px;font-size:9pt;">V. PLAN DE MANEJO / INDICACIONES</div>
-      <div style="font-size:10pt;">${(v.planManejo||'—').replace(/\n/g,'<br>')}</div>
+      <div style="font-size:10pt;">${(v.planManejo||'—').split('\n').join('<br>')}</div>
     </div>
 
     <!-- MEDICAMENTOS INDICADOS -->
