@@ -201,6 +201,10 @@ tailwind.config = {
         class="w-full py-2 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">
         + Nuevo Paciente
       </button>
+      <button onclick="showStats()"
+        class="w-full py-2 text-sm font-medium bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors">
+        Estadísticas
+      </button>
     </div>
     <!-- Patient list -->
     <div class="sidebar-scroll p-2" id="patientList"></div>
@@ -2087,6 +2091,243 @@ function renderPrint(html) {
     window.print();
     setTimeout(() => { pv.style.display = 'none'; }, 1000);
   }, 200);
+}
+
+// ─── ESTADÍSTICAS ───────────────────────────────────────────────────────────
+function showStats() {
+  activePatientId = null;
+  renderPatientList();
+  Object.values(activeCharts).forEach(c => c.destroy());
+  activeCharts = {};
+
+  const patients = state.patients;
+  const allVisits = patients.flatMap(p => (p.visitas||[]).map(v => ({...v, paciente: p})));
+  const allRecetas = patients.flatMap(p => (p.recetas||[]).map(r => ({...r, paciente: p})));
+  const now = new Date();
+  const thisMonth = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  const thisYear  = String(now.getFullYear());
+
+  const visitasEsteMes = allVisits.filter(v => v.fecha?.startsWith(thisMonth)).length;
+  const visitasEsteAno = allVisits.filter(v => v.fecha?.startsWith(thisYear)).length;
+
+  // Visitas por mes (últimos 12 meses)
+  const mesesLabels = [], mesesData = [];
+  for (let i = 11; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+    const mes = d.toLocaleDateString('es-MX', {month:'short', year:'2-digit'});
+    mesesLabels.push(mes);
+    mesesData.push(allVisits.filter(v => v.fecha?.startsWith(key)).length);
+  }
+
+  // Sexo
+  const sexoCount = {Masculino:0, Femenino:0, Otro:0};
+  patients.forEach(p => { sexoCount[p.sexo] = (sexoCount[p.sexo]||0) + 1; });
+
+  // Grupos de edad
+  const edadGrupos = {'0-17':0,'18-40':0,'41-60':0,'61-80':0,'80+':0};
+  patients.forEach(p => {
+    const age = calcAge(p.fechaNac);
+    if (age <= 17) edadGrupos['0-17']++;
+    else if (age <= 40) edadGrupos['18-40']++;
+    else if (age <= 60) edadGrupos['41-60']++;
+    else if (age <= 80) edadGrupos['61-80']++;
+    else edadGrupos['80+']++;
+  });
+
+  // Top 10 diagnósticos crónicos
+  const dxCronicoCount = {};
+  patients.forEach(p => (p.diagnosticosCronicos||[]).forEach(d => {
+    if (d) dxCronicoCount[d] = (dxCronicoCount[d]||0) + 1;
+  }));
+  const topDxCronicos = Object.entries(dxCronicoCount).sort((a,b)=>b[1]-a[1]).slice(0,10);
+
+  // Top 10 diagnósticos de visitas
+  const dxVisitaCount = {};
+  allVisits.forEach(v => (v.diagnosticosVisita||[]).forEach(d => {
+    if (d) dxVisitaCount[d] = (dxVisitaCount[d]||0) + 1;
+  }));
+  const topDxVisitas = Object.entries(dxVisitaCount).sort((a,b)=>b[1]-a[1]).slice(0,10);
+
+  // Top 10 medicamentos prescritos en recetas
+  const medCount = {};
+  allRecetas.forEach(r => (r.medicamentos||[]).forEach(m => {
+    if (m.generico) medCount[m.generico] = (medCount[m.generico]||0) + 1;
+  }));
+  const topMeds = Object.entries(medCount).sort((a,b)=>b[1]-a[1]).slice(0,10);
+
+  // Promedios de signos vitales (últimas visitas de cada paciente)
+  const avg = arr => arr.length ? (arr.reduce((a,b)=>a+b,0)/arr.length).toFixed(1) : '—';
+  const vitalsAll = allVisits.filter(v => v.taSistolica);
+  const avgSis  = avg(vitalsAll.map(v=>parseFloat(v.taSistolica)));
+  const avgDias = avg(vitalsAll.map(v=>parseFloat(v.taDiastolica||0)));
+  const avgFC   = avg(allVisits.filter(v=>v.fc).map(v=>parseFloat(v.fc)));
+  const avgSPO2 = avg(allVisits.filter(v=>v.sato2).map(v=>parseFloat(v.sato2)));
+  const avgGlu  = avg(allVisits.filter(v=>v.glucosa).map(v=>parseFloat(v.glucosa)));
+  const avgIMC  = avg(allVisits.filter(v=>v.imc).map(v=>parseFloat(v.imc)));
+
+  setTopBar(`<span class="text-sm font-semibold">Estadísticas de la Práctica</span>`);
+
+  const isDark = state.darkMode;
+  const textColor = isDark ? '#9ca3af' : '#6b7280';
+  const gridColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)';
+
+  document.getElementById('mainContent').innerHTML = `
+  <div class="max-w-5xl mx-auto space-y-6">
+
+    <!-- TARJETAS RESUMEN -->
+    <div class="grid grid-cols-4 gap-4">
+      ${statCard('Pacientes', patients.length, '#3b82f6')}
+      ${statCard('Visitas totales', allVisits.length, '#8b5cf6')}
+      ${statCard('Visitas este mes', visitasEsteMes, '#10b981')}
+      ${statCard('Recetas emitidas', allRecetas.length, '#f97316')}
+    </div>
+
+    <!-- PROMEDIOS SIGNOS VITALES -->
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4">
+      <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Promedios de Signos Vitales (todas las visitas)</h3>
+      <div class="grid grid-cols-6 gap-3 text-center text-xs">
+        ${vitalAvgCard('T/A Sistólica', avgSis, 'mmHg', 130, true)}
+        ${vitalAvgCard('T/A Diastólica', avgDias, 'mmHg', 80, true)}
+        ${vitalAvgCard('Glucosa', avgGlu, 'mg/dL', 100, true)}
+        ${vitalAvgCard('F.C.', avgFC, 'lpm', 100, true)}
+        ${vitalAvgCard('SpO₂', avgSPO2, '%', 95, false)}
+        ${vitalAvgCard('IMC', avgIMC, 'kg/m²', 25, true)}
+      </div>
+    </div>
+
+    <!-- VISITAS POR MES + SEXO -->
+    <div class="grid grid-cols-3 gap-4">
+      <div class="col-span-2 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4">
+        <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Visitas por Mes (últimos 12 meses)</h3>
+        <div style="height:200px;position:relative;"><canvas id="chartMeses"></canvas></div>
+      </div>
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4">
+        <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">Pacientes por Sexo</h3>
+        <div style="height:130px;position:relative;"><canvas id="chartSexo"></canvas></div>
+        <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 mt-3">Grupos de Edad</h3>
+        <div style="height:130px;position:relative;"><canvas id="chartEdad"></canvas></div>
+      </div>
+    </div>
+
+    <!-- TOP DIAGNÓSTICOS -->
+    <div class="grid grid-cols-2 gap-4">
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4">
+        <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Top Diagnósticos Crónicos</h3>
+        ${topDxCronicos.length > 0
+          ? `<div style="height:${Math.max(160, topDxCronicos.length*28)}px;position:relative;"><canvas id="chartDxCronicos"></canvas></div>`
+          : '<p class="text-xs text-gray-400 text-center py-8">Sin datos</p>'}
+      </div>
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4">
+        <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Top Diagnósticos en Visitas</h3>
+        ${topDxVisitas.length > 0
+          ? `<div style="height:${Math.max(160, topDxVisitas.length*28)}px;position:relative;"><canvas id="chartDxVisitas"></canvas></div>`
+          : '<p class="text-xs text-gray-400 text-center py-8">Sin datos</p>'}
+      </div>
+    </div>
+
+    <!-- TOP MEDICAMENTOS -->
+    ${topMeds.length > 0 ? `
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4">
+      <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Medicamentos Más Prescritos</h3>
+      <div style="height:${Math.max(160, topMeds.length*28)}px;position:relative;"><canvas id="chartMeds"></canvas></div>
+    </div>` : ''}
+
+  </div>`;
+
+  setTimeout(() => {
+    const opts = (idx) => ({
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: textColor, font:{size:9} }, grid: { color: gridColor } },
+        y: { ticks: { color: textColor, font:{size:9} }, grid: { color: gridColor } }
+      }
+    });
+
+    // Visitas por mes
+    new Chart(document.getElementById('chartMeses'), {
+      type: 'bar',
+      data: { labels: mesesLabels, datasets: [{ data: mesesData,
+        backgroundColor: '#6366f1cc', borderColor: '#6366f1', borderWidth: 1, borderRadius: 4 }] },
+      options: {...opts(), plugins:{legend:{display:false}}}
+    });
+
+    // Sexo
+    new Chart(document.getElementById('chartSexo'), {
+      type: 'doughnut',
+      data: { labels: Object.keys(sexoCount), datasets: [{ data: Object.values(sexoCount),
+        backgroundColor: ['#3b82f6','#ec4899','#f59e0b'], borderWidth: 0 }] },
+      options: { responsive:true, maintainAspectRatio:false,
+        plugins: { legend: { position:'right', labels:{ color:textColor, font:{size:9}, boxWidth:10 } } } }
+    });
+
+    // Edad
+    new Chart(document.getElementById('chartEdad'), {
+      type: 'doughnut',
+      data: { labels: Object.keys(edadGrupos), datasets: [{ data: Object.values(edadGrupos),
+        backgroundColor: ['#10b981','#3b82f6','#8b5cf6','#f97316','#ef4444'], borderWidth: 0 }] },
+      options: { responsive:true, maintainAspectRatio:false,
+        plugins: { legend: { position:'right', labels:{ color:textColor, font:{size:9}, boxWidth:10 } } } }
+    });
+
+    const hbarOpts = (color) => ({
+      indexAxis: 'y', responsive:true, maintainAspectRatio:false,
+      plugins: { legend:{display:false} },
+      scales: {
+        x: { ticks:{color:textColor,font:{size:9}}, grid:{color:gridColor} },
+        y: { ticks:{color:textColor,font:{size:9},mirror:false}, grid:{display:false} }
+      }
+    });
+
+    // Dx crónicos
+    if (document.getElementById('chartDxCronicos') && topDxCronicos.length > 0) {
+      new Chart(document.getElementById('chartDxCronicos'), {
+        type: 'bar',
+        data: { labels: topDxCronicos.map(d=>d[0]), datasets:[{ data:topDxCronicos.map(d=>d[1]),
+          backgroundColor:'#3b82f6cc', borderColor:'#3b82f6', borderWidth:1, borderRadius:3 }] },
+        options: hbarOpts('#3b82f6')
+      });
+    }
+
+    // Dx visitas
+    if (document.getElementById('chartDxVisitas') && topDxVisitas.length > 0) {
+      new Chart(document.getElementById('chartDxVisitas'), {
+        type: 'bar',
+        data: { labels: topDxVisitas.map(d=>d[0]), datasets:[{ data:topDxVisitas.map(d=>d[1]),
+          backgroundColor:'#8b5cf6cc', borderColor:'#8b5cf6', borderWidth:1, borderRadius:3 }] },
+        options: hbarOpts('#8b5cf6')
+      });
+    }
+
+    // Medicamentos
+    if (document.getElementById('chartMeds') && topMeds.length > 0) {
+      new Chart(document.getElementById('chartMeds'), {
+        type: 'bar',
+        data: { labels: topMeds.map(d=>d[0]), datasets:[{ data:topMeds.map(d=>d[1]),
+          backgroundColor:'#f97316cc', borderColor:'#f97316', borderWidth:1, borderRadius:3 }] },
+        options: hbarOpts('#f97316')
+      });
+    }
+  }, 50);
+}
+
+function statCard(label, value, color) {
+  return `<div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4 text-center">
+    <div class="text-2xl font-bold" style="color:${color};">${value}</div>
+    <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">${label}</div>
+  </div>`;
+}
+
+function vitalAvgCard(label, val, unit, ref, highIsBad) {
+  const num = parseFloat(val);
+  const over = !isNaN(num) && (highIsBad ? num > ref : num < ref);
+  const color = over ? '#ef4444' : '#10b981';
+  return `<div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2">
+    <div class="text-xs text-gray-500 dark:text-gray-400 mb-1 leading-tight">${label}</div>
+    <div class="font-bold text-sm" style="color:${color};">${val}</div>
+    <div class="text-xs text-gray-400">${unit}</div>
+  </div>`;
 }
 
 // ─── AUTO-SAVE A CARPETA ────────────────────────────────────────────────────
