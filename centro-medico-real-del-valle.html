@@ -363,6 +363,8 @@ function showPatientDashboard(id) {
   const main = document.getElementById('mainContent');
   main.innerHTML = `
     <div class="max-w-4xl mx-auto space-y-4">
+
+      <!-- RESUMEN -->
       <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4">
         <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Resumen del Paciente</h3>
         <div class="grid grid-cols-2 gap-4 text-xs">
@@ -375,6 +377,10 @@ function showPatientDashboard(id) {
         </div>
       </div>
 
+      <!-- GRÁFICAS DE SIGNOS VITALES -->
+      ${buildVitalsChartsHTML(p)}
+
+      <!-- NOTAS DE VISITA -->
       <div>
         <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Notas de Visita (${visits.length})</h3>
         ${visits.length === 0 ? `<div class="text-xs text-gray-400 text-center py-8">Sin notas registradas</div>` :
@@ -398,6 +404,9 @@ function showPatientDashboard(id) {
           </div>`).join('')}
       </div>
     </div>`;
+
+  // Render vitals charts after DOM is ready
+  setTimeout(() => renderVitalsCharts(p), 50);
 }
 
 // ─── NEW PATIENT FORM ───────────────────────────────────────────────────────
@@ -995,8 +1004,6 @@ function showLabsSection(patientId) {
       </div>
     </div>` : ''}
 
-    <!-- También graficamos signos vitales de visitas -->
-    ${buildVitalsChartsHTML(p)}
 
     <!-- TABLA DE RESULTADOS -->
     <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
@@ -1041,7 +1048,6 @@ function showLabsSection(patientId) {
   if (labs.length > 0) {
     setTimeout(() => {
       renderLabCharts(labs, hasData);
-      renderVitalsCharts(p);
     }, 50);
   }
 }
