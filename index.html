@@ -1054,16 +1054,29 @@ function getFlag(field, val) {
 }
 
 function buildVitalsChartsHTML(p) {
-  const visits = (p.visitas || []).filter(v => v.peso || v.taSistolica || v.glucosa);
-  if (visits.length < 2) return '';
+  const all = [...(p.visitas || [])].sort((a,b) => a.fecha.localeCompare(b.fecha));
+  if (all.length < 1) return '';
+  const hasPeso  = all.filter(v => v.peso).length >= 2;
+  const hasTA    = all.filter(v => v.taSistolica).length >= 2;
+  const hasGlu   = all.filter(v => v.glucosa).length >= 2;
+  const hasIMC   = all.filter(v => v.imc).length >= 2;
+  const hasFC    = all.filter(v => v.fc).length >= 2;
+  const hasSPO2  = all.filter(v => v.sato2).length >= 2;
+  if (!hasPeso && !hasTA && !hasGlu && !hasIMC && !hasFC && !hasSPO2) return '';
+
+  const card = (id, label, unit) =>
+    `<div><p class="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">${label} <span class="font-normal text-gray-400">(${unit})</span></p><div style="height:160px;position:relative;"><canvas id="${id}"></canvas></div></div>`;
+
   return `
   <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4">
-    <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4">Signos Vitales (de notas de visita)</h3>
+    <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4">Signos Vitales — Tendencia en el tiempo</h3>
     <div class="grid grid-cols-2 gap-6">
-      ${visits.some(v=>v.peso) ? `<div><p class="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Peso <span class="font-normal text-gray-400">(kg)</span></p><div style="height:160px;position:relative;"><canvas id="chart_peso"></canvas></div></div>` : ''}
-      ${visits.some(v=>v.taSistolica) ? `<div><p class="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Presión Arterial <span class="font-normal text-gray-400">(mmHg)</span></p><div style="height:160px;position:relative;"><canvas id="chart_ta"></canvas></div></div>` : ''}
-      ${visits.some(v=>v.glucosa) ? `<div><p class="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Glucosa capilar <span class="font-normal text-gray-400">(mg/dL)</span></p><div style="height:160px;position:relative;"><canvas id="chart_glucosaVisita"></canvas></div></div>` : ''}
-      ${visits.some(v=>v.imc) ? `<div><p class="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">IMC <span class="font-normal text-gray-400">(kg/m²)</span></p><div style="height:160px;position:relative;"><canvas id="chart_imc"></canvas></div></div>` : ''}
+      ${hasTA   ? card('chart_ta',   'Presión Arterial', 'mmHg') : ''}
+      ${hasGlu  ? card('chart_glucosaVisita', 'Glucosa (ayuno / postprandial)', 'mg/dL') : ''}
+      ${hasFC   ? card('chart_fc',   'Frecuencia Cardíaca', 'lpm') : ''}
+      ${hasSPO2 ? card('chart_spo2', 'Saturación O₂', '%') : ''}
+      ${hasPeso ? card('chart_peso', 'Peso', 'kg') : ''}
+      ${hasIMC  ? card('chart_imc',  'IMC', 'kg/m²') : ''}
     </div>
   </div>`;
 }
@@ -1173,15 +1186,25 @@ function renderVitalsCharts(p) {
   const textColor = isDark ? '#9ca3af' : '#6b7280';
   const visits = [...(p.visitas||[])].sort((a,b) => a.fecha.localeCompare(b.fecha));
 
-  const makeChart = (id, datasets, labels) => {
+  const refLine = (val, color, label) => ({
+    label, data: Array(100).fill(val),
+    borderColor: color, borderDash: [4,4], borderWidth: 1,
+    pointRadius: 0, fill: false,
+  });
+
+  const makeChart = (id, datasets, labels, unit = '') => {
     const canvas = document.getElementById(id);
     if (!canvas) return;
+    const showLegend = datasets.filter(d => d.label && !d.borderDash).length > 1;
     const c = new Chart(canvas, {
       type: 'line',
       data: { labels, datasets },
       options: {
         responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: datasets.length > 1, labels: { color: textColor, font: { size: 9 }, boxWidth: 10 } }, tooltip: {} },
+        plugins: {
+          legend: { display: showLegend, labels: { color: textColor, font: { size: 9 }, boxWidth: 10, filter: i => !i.hidden } },
+          tooltip: { callbacks: { label: ctx => ctx.dataset.borderDash ? null : `${ctx.dataset.label || ''} ${ctx.parsed.y} ${unit}`.trim() } }
+        },
         scales: {
           x: { ticks: { color: textColor, font: { size: 9 }, maxRotation: 30 }, grid: { color: gridColor } },
           y: { ticks: { color: textColor, font: { size: 9 } }, grid: { color: gridColor } }
@@ -1191,37 +1214,72 @@ function renderVitalsCharts(p) {
     activeCharts[id] = c;
   };
 
-  // Peso
-  const pesoVisits = visits.filter(v => v.peso);
-  if (pesoVisits.length >= 2) {
-    makeChart('chart_peso',
-      [{ data: pesoVisits.map(v => parseFloat(v.peso)), borderColor: '#f59e0b', backgroundColor: '#f59e0b22', borderWidth: 2, pointRadius: 4, fill: true, tension: 0.3 }],
-      pesoVisits.map(v => v.fecha));
-  }
-
-  // TA
-  const taVisits = visits.filter(v => v.taSistolica);
-  if (taVisits.length >= 2) {
+  // TA — líneas de referencia: sistólica <120 normal, <130 elevada; diastólica <80
+  const taV = visits.filter(v => v.taSistolica);
+  if (taV.length >= 2) {
     makeChart('chart_ta', [
-      { label: 'Sistólica', data: taVisits.map(v => parseFloat(v.taSistolica)), borderColor: '#ef4444', backgroundColor: '#ef444422', borderWidth: 2, pointRadius: 4, fill: false, tension: 0.3 },
-      { label: 'Diastólica', data: taVisits.map(v => parseFloat(v.taDiastolica||0)), borderColor: '#3b82f6', backgroundColor: '#3b82f622', borderWidth: 2, pointRadius: 4, fill: false, tension: 0.3 },
-    ], taVisits.map(v => v.fecha));
+      { label: 'Sistólica', data: taV.map(v => parseFloat(v.taSistolica)), borderColor: '#ef4444', backgroundColor: '#ef444415', borderWidth: 2, pointRadius: 4, fill: false, tension: 0.3 },
+      { label: 'Diastólica', data: taV.map(v => parseFloat(v.taDiastolica||0)), borderColor: '#3b82f6', backgroundColor: '#3b82f615', borderWidth: 2, pointRadius: 4, fill: false, tension: 0.3 },
+      refLine(130, 'rgba(239,68,68,0.35)', 'Ref sistólica'),
+      refLine(80,  'rgba(59,130,246,0.35)', 'Ref diastólica'),
+    ], taV.map(v => v.fecha), 'mmHg');
   }
 
-  // Glucosa capilar
-  const gluVisits = visits.filter(v => v.glucosa);
-  if (gluVisits.length >= 2) {
-    makeChart('chart_glucosaVisita',
-      [{ data: gluVisits.map(v => parseFloat(v.glucosa)), borderColor: '#f97316', backgroundColor: '#f9731622', borderWidth: 2, pointRadius: 4, fill: true, tension: 0.3 }],
-      gluVisits.map(v => v.fecha));
+  // Glucosa — separada por tipo: ayuno vs postprandial
+  const gluV = visits.filter(v => v.glucosa);
+  if (gluV.length >= 2) {
+    const allLabels = gluV.map(v => v.fecha);
+    const ayunoData    = gluV.map(v => v.tipoGlucosa === 'Ayuno'       ? parseFloat(v.glucosa) : null);
+    const postData     = gluV.map(v => v.tipoGlucosa === 'Postprandial'? parseFloat(v.glucosa) : null);
+    const casualData   = gluV.map(v => (!v.tipoGlucosa || v.tipoGlucosa === 'Casual') ? parseFloat(v.glucosa) : null);
+    const hasAyuno = ayunoData.some(x => x !== null);
+    const hasPost  = postData.some(x => x !== null);
+    const hasCasual = casualData.some(x => x !== null);
+    const datasets = [];
+    if (hasAyuno)  datasets.push({ label: 'Ayuno',        data: ayunoData,  borderColor: '#f59e0b', backgroundColor: '#f59e0b22', borderWidth: 2, pointRadius: 5, spanGaps: true, fill: false, tension: 0.3 });
+    if (hasPost)   datasets.push({ label: 'Postprandial', data: postData,   borderColor: '#ef4444', backgroundColor: '#ef444422', borderWidth: 2, pointRadius: 5, spanGaps: true, fill: false, tension: 0.3 });
+    if (hasCasual) datasets.push({ label: 'Casual',       data: casualData, borderColor: '#a855f7', backgroundColor: '#a855f722', borderWidth: 2, pointRadius: 5, spanGaps: true, fill: false, tension: 0.3 });
+    datasets.push(refLine(100, 'rgba(245,158,11,0.4)', 'Ref ayuno'));
+    datasets.push(refLine(140, 'rgba(239,68,68,0.4)',  'Ref postprandial'));
+    makeChart('chart_glucosaVisita', datasets, allLabels, 'mg/dL');
   }
 
-  // IMC
-  const imcVisits = visits.filter(v => v.imc);
-  if (imcVisits.length >= 2) {
-    makeChart('chart_imc',
-      [{ data: imcVisits.map(v => parseFloat(v.imc)), borderColor: '#8b5cf6', backgroundColor: '#8b5cf622', borderWidth: 2, pointRadius: 4, fill: true, tension: 0.3 }],
-      imcVisits.map(v => v.fecha));
+  // FC — ref 60-100 lpm
+  const fcV = visits.filter(v => v.fc);
+  if (fcV.length >= 2) {
+    makeChart('chart_fc', [
+      { label: 'FC', data: fcV.map(v => parseFloat(v.fc)), borderColor: '#ec4899', backgroundColor: '#ec489922', borderWidth: 2, pointRadius: 4, fill: true, tension: 0.3 },
+      refLine(100, 'rgba(239,68,68,0.35)',  'Ref máx'),
+      refLine(60,  'rgba(59,130,246,0.35)', 'Ref mín'),
+    ], fcV.map(v => v.fecha), 'lpm');
+  }
+
+  // SpO2 — ref >= 95%
+  const spoV = visits.filter(v => v.sato2);
+  if (spoV.length >= 2) {
+    makeChart('chart_spo2', [
+      { label: 'SpO₂', data: spoV.map(v => parseFloat(v.sato2)), borderColor: '#06b6d4', backgroundColor: '#06b6d422', borderWidth: 2, pointRadius: 4, fill: true, tension: 0.3 },
+      refLine(95, 'rgba(239,68,68,0.35)', 'Ref mín 95%'),
+    ], spoV.map(v => v.fecha), '%');
+  }
+
+  // Peso
+  const pesoV = visits.filter(v => v.peso);
+  if (pesoV.length >= 2) {
+    makeChart('chart_peso',
+      [{ data: pesoV.map(v => parseFloat(v.peso)), borderColor: '#f59e0b', backgroundColor: '#f59e0b22', borderWidth: 2, pointRadius: 4, fill: true, tension: 0.3 }],
+      pesoV.map(v => v.fecha), 'kg');
+  }
+
+  // IMC — líneas de referencia: 18.5, 25, 30
+  const imcV = visits.filter(v => v.imc);
+  if (imcV.length >= 2) {
+    makeChart('chart_imc', [
+      { data: imcV.map(v => parseFloat(v.imc)), borderColor: '#8b5cf6', backgroundColor: '#8b5cf622', borderWidth: 2, pointRadius: 4, fill: true, tension: 0.3 },
+      refLine(18.5, 'rgba(59,130,246,0.35)',  'Bajo peso'),
+      refLine(25,   'rgba(245,158,11,0.35)',   'Sobrepeso'),
+      refLine(30,   'rgba(239,68,68,0.35)',    'Obesidad'),
+    ], imcV.map(v => v.fecha), 'kg/m²');
   }
 }
 
