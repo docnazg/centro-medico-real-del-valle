@@ -2530,6 +2530,102 @@ function exportExcel() {
   XLSX.writeFile(wb, `CMRV_${formatDate(new Date()).replace(/\//g,'-')}.xlsx`);
 }
 
+// ─── DIAGNÓSTICOS CATÁLOGO + AUTOCOMPLETADO ─────────────────────────────────
+function getDiagnosisCatalog() {
+  const seen = new Map(); // lowercase -> canonical
+  state.patients.forEach(p => {
+    (p.diagnosticosCronicos||[]).forEach(d => {
+      if (!d?.trim()) return;
+      const key = d.trim().toLowerCase();
+      if (!seen.has(key)) seen.set(key, d.trim());
+    });
+    (p.visitas||[]).forEach(v => {
+      (v.diagnosticosVisita||[]).forEach(d => {
+        if (!d?.trim()) return;
+        const key = d.trim().toLowerCase();
+        if (!seen.has(key)) seen.set(key, d.trim());
+      });
+    });
+  });
+  return [...seen.values()].sort((a,b) => a.localeCompare(b, 'es'));
+}
+
+function attachDxAutocomplete(input) {
+  if (!input || input._dxAc) return;
+  input._dxAc = true;
+
+  const dropdown = document.getElementById('dxDropdown');
+
+  function showDropdown(matches) {
+    if (!matches.length) { hideDropdown(); return; }
+    const rect = input.getBoundingClientRect();
+    dropdown.style.top  = (rect.bottom + window.scrollY + 2) + 'px';
+    dropdown.style.left = rect.left + 'px';
+    dropdown.style.width = rect.width + 'px';
+    dropdown.style.display = 'block';
+    dropdown.innerHTML = matches.map(m =>
+      `<div class="dx-option" data-value="${m.replace(/"/g,'&quot;')}"
+        style="padding:8px 12px;cursor:pointer;font-size:13px;color:${state.darkMode?'#e5e7eb':'#111827'};"
+        onmousedown="event.preventDefault()"
+        onmouseenter="this.style.background='${state.darkMode?'#374151':'#eff6ff'}'"
+        onmouseleave="this.style.background=''">${m}</div>`
+    ).join('');
+    dropdown.querySelectorAll('.dx-option').forEach(opt => {
+      opt.addEventListener('mousedown', () => {
+        input.value = opt.dataset.value;
+        hideDropdown();
+        input.dispatchEvent(new Event('input'));
+      });
+    });
+  }
+
+  function hideDropdown() {
+    dropdown.style.display = 'none';
+    dropdown.innerHTML = '';
+  }
+
+  input.addEventListener('input', () => {
+    const q = input.value.trim().toLowerCase();
+    if (!q) { hideDropdown(); return; }
+    const catalog = getDiagnosisCatalog();
+    const matches = catalog.filter(d => d.toLowerCase().includes(q));
+    showDropdown(matches);
+  });
+
+  input.addEventListener('keydown', e => {
+    if (dropdown.style.display === 'none') return;
+    const opts = dropdown.querySelectorAll('.dx-option');
+    const active = dropdown.querySelector('.dx-active');
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      const next = active ? (active.nextElementSibling || opts[0]) : opts[0];
+      active?.classList.remove('dx-active');
+      active && (active.style.background = '');
+      next?.classList.add('dx-active');
+      next && (next.style.background = state.darkMode ? '#374151' : '#eff6ff');
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      const prev = active ? (active.previousElementSibling || opts[opts.length-1]) : opts[opts.length-1];
+      active?.classList.remove('dx-active');
+      active && (active.style.background = '');
+      prev?.classList.add('dx-active');
+      prev && (prev.style.background = state.darkMode ? '#374151' : '#eff6ff');
+    } else if (e.key === 'Enter' && active) {
+      e.preventDefault();
+      input.value = active.dataset.value;
+      hideDropdown();
+    } else if (e.key === 'Escape') {
+      hideDropdown();
+    }
+  });
+
+  input.addEventListener('blur', () => setTimeout(hideDropdown, 150));
+}
+
+function attachAllDxAutocomplete() {
+  document.querySelectorAll('[id^="dxCronico_"], [id^="dxVisita_"]').forEach(attachDxAutocomplete);
+}
+
 // ─── HELPERS ────────────────────────────────────────────────────────────────
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2); }
 function gv(id) { return document.getElementById(id)?.value?.trim() || ''; }
@@ -2578,6 +2674,7 @@ function textarea(id, placeholder, value='') {
 }
 
 function applyInputStyles() {
+  setTimeout(attachAllDxAutocomplete, 30);
   document.querySelectorAll('.input-base').forEach(el => {
     el.className = el.className.replace('input-base','');
     el.classList.add(
@@ -2608,5 +2705,7 @@ applyDark();
 renderPatientList();
 initAutoSave();
 </script>
+  <!-- Diagnosis autocomplete dropdown -->
+  <div id="dxDropdown" style="display:none;position:fixed;z-index:9999;background:white;border:1px solid #d1d5db;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.12);max-height:200px;overflow-y:auto;min-width:240px;" class="dark:bg-gray-800 dark:border-gray-600"></div>
 </body>
 </html>
